@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iPhoneStat — карта памяти</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f0efec;
+    --text: #0b0b0b; --text-2: #52514e; --muted: #898781;
+    --hairline: #e1e0d9; --ring: rgba(11,11,11,0.10); --wash: rgba(11,11,11,0.05); --selected: #cde2fb;
+    --k-app: #2a78d6; --k-appdata: #eb6834; --k-image: #1baf7a; --k-video: #eda100;
+    --k-audio: #e87ba4; --k-doc: #008300; --k-other: #6250d6; --k-hidden: #e34948;
+    --k-system: #898781; --k-free: #e9e8e2;
+    --ink-on-fill: #ffffff; --ink-on-video: #0b0b0b; --ink-on-free: #52514e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --surface-2: #262624;
+      --text: #f0efec; --text-2: #c3c2b7; --muted: #898781;
+      --hairline: #2c2c2a; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.06); --selected: #184f95;
+      --k-app: #3987e5; --k-appdata: #d95926; --k-image: #199e70; --k-video: #c98500;
+      --k-audio: #d55181; --k-doc: #008300; --k-other: #9085e9; --k-hidden: #e66767;
+      --k-system: #5f5e59; --k-free: #2c2c2a;
+      --ink-on-fill: #ffffff; --ink-on-video: #ffffff; --ink-on-free: #c3c2b7;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; flex-direction: column; background: var(--page); color: var(--text);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header { padding: 12px 16px 10px; border-bottom: 1px solid var(--hairline); background: var(--surface); }
+  .title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+  h1 { margin: 0; font-size: 17px; font-weight: 650; }
+  .meta, .summary { color: var(--text-2); }
+  .summary strong { color: var(--text); font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 0; padding: 0; list-style: none; }
+  .legend li { display: flex; align-items: center; gap: 6px; color: var(--text-2); white-space: nowrap; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; box-shadow: inset 0 0 0 1px var(--ring); }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(280px, 400px) 1fr; }
+  .tree-pane { overflow: auto; border-right: 1px solid var(--hairline); background: var(--surface); padding: 6px 0; }
+  .map-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 12px;
+    border-bottom: 1px solid var(--hairline); background: var(--surface);
+  }
+  .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; flex: 1; min-width: 160px; }
+  .crumbs button {
+    border: 0; background: none; color: var(--text-2); font: inherit; padding: 2px 6px; border-radius: 4px; cursor: pointer;
+  }
+  .crumbs button:hover { background: var(--wash); }
+  .crumbs button[aria-current] { color: var(--text); font-weight: 600; cursor: default; }
+  .crumbs .sep { color: var(--muted); }
+  .toolbar label { display: flex; align-items: center; gap: 6px; color: var(--text-2); cursor: pointer; }
+  .hint { color: var(--muted); }
+  .map { position: relative; flex: 1; min-height: 240px; background: var(--surface); }
+  .map canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #overlay { pointer-events: none; }
+  .tooltip {
+    position: fixed; z-index: 10; max-width: 340px; padding: 8px 10px; border-radius: 6px; pointer-events: none;
+    background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--ring), 0 6px 20px rgba(0,0,0,0.18);
+  }
+  .tooltip[hidden] { display: none; }
+  .tooltip .tt-name { font-weight: 600; overflow-wrap: anywhere; }
+  .tooltip .tt-size { margin-top: 2px; }
+  .tooltip .tt-kind { display: flex; align-items: center; gap: 6px; }
+  .tooltip .tt-dim { color: var(--text-2); overflow-wrap: anywhere; }
+  .row {
+    display: grid; grid-template-columns: 16px 10px minmax(0, 1fr) 46px 48px 72px; align-items: center; gap: 6px;
+    padding: 3px 10px 3px 0; cursor: pointer; outline: none;
+  }
+  .row:hover { background: var(--wash); }
+  .row:focus-visible { box-shadow: inset 0 0 0 2px var(--k-app); }
+  .row.selected { background: var(--selected); }
+  .caret { border: 0; background: none; color: var(--muted); padding: 0; font-size: 10px; cursor: pointer; width: 16px; }
+  .caret[hidden] { visibility: hidden; display: block !important; }
+  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 3px; background: var(--muted); }
+  .pct, .size { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-2); white-space: nowrap; }
+  .size { color: var(--text); }
+  .more { margin: 2px 0 4px; border: 0; background: none; color: var(--k-app); font: inherit; cursor: pointer; }
+  .btn {
+    border: 1px solid var(--ring); background: var(--surface); color: var(--text); font: inherit;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer; white-space: nowrap; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .btn:hover:not(:disabled) { background: var(--wash); }
+  .btn:focus-visible { outline: 2px solid var(--k-app); outline-offset: 2px; }
+  .btn:disabled { color: var(--muted); cursor: default; }
+  .btn.primary { background: var(--k-app); border-color: transparent; color: #fff; font-weight: 600; }
+  .btn.primary:hover:not(:disabled) { background: var(--k-app); filter: brightness(1.1); }
+  .btn.primary:disabled { background: var(--surface-2); color: var(--muted); font-weight: 400; }
+  .header-actions { margin-left: auto; }
+  [hidden] { display: none !important; }
+  .job {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 16px;
+    border-top: 1px solid var(--hairline); background: var(--surface); box-shadow: 0 -6px 18px rgba(0,0,0,0.08);
+  }
+  .job-main { flex: 1; min-width: 220px; }
+  .job-title { font-weight: 600; }
+  .job-detail { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .job progress { display: block; width: 100%; height: 6px; margin: 5px 0 4px; accent-color: var(--k-app); }
+  @media (max-width: 800px) {
+    main { grid-template-columns: 1fr; grid-template-rows: minmax(180px, 38%) 1fr; }
+    .tree-pane { border-right: 0; border-bottom: 1px solid var(--hairline); }
+    .hint { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="title-row">
+    <h1 id="device-name"></h1>
+    <span class="meta" id="device-meta"></span>
+    <span class="summary" id="summary"></span>
+    <span class="header-actions" id="header-actions" hidden>
+      <button type="button" class="btn" id="backup-btn">Резервная копия iPhone…</button>
+    </span>
+  </div>
+  <ul class="legend" id="legend" aria-label="Обозначения цветов"></ul>
+</header>
+<main>
+  <section class="tree-pane" id="tree" aria-label="Список по размеру"></section>
+  <section class="map-pane" aria-label="Карта занятого места">
+    <div class="toolbar">
+      <nav class="crumbs" id="crumbs" aria-label="Текущий уровень"></nav>
+      <button type="button" class="btn primary" id="export-btn" hidden disabled>Скопировать на ПК…</button>
+      <label><input type="checkbox" id="show-free"> Показывать свободное место</label>
+      <span class="hint">Двойной щелчок — приблизить · Esc — назад</span>
+    </div>
+    <div class="map" id="map">
+      <canvas id="canvas"></canvas>
+      <canvas id="overlay"></canvas>
+    </div>
+  </section>
+</main>
+<section class="job" id="job" aria-live="polite" hidden>
+  <div class="job-main">
+    <div class="job-title" id="job-title"></div>
+    <progress id="job-progress" max="100"></progress>
+    <div class="job-detail" id="job-detail"></div>
+  </div>
+  <button type="button" class="btn" id="job-cancel">Отменить</button>
+  <button type="button" class="btn" id="job-reveal">Открыть папку</button>
+  <button type="button" class="btn" id="job-close">Закрыть</button>
+</section>
+<div class="tooltip" id="tooltip" hidden></div>
+
+<script>
+'use strict';
+const REPORT = "__REPORT_DATA__";
+
+const KINDS = [
+  { id: 'app', label: 'Программы' },
+  { id: 'appdata', label: 'Данные приложений' },
+  { id: 'image', label: 'Фото' },
+  { id: 'video', label: 'Видео' },
+  { id: 'audio', label: 'Аудио' },
+  { id: 'doc', label: 'Книги и документы' },
+  { id: 'other', label: 'Прочие файлы' },
+  { id: 'hidden', label: 'Системные данные (скрыты iOS)' },
+  { id: 'system', label: 'iOS' },
+  { id: 'free', label: 'Свободно' },
+];
+const KIND_LABEL = Object.fromEntries(KINDS.map((k) => [k.id, k.label]));
+const UNITS = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+const MIN_SPLIT_PX = 6;
+const HEADER_PX = 20;
+const BUNDLE_MIN_PX = 12;
+const HEADER_MIN_W = 90;
+const HEADER_MIN_H = 46;
+const LABEL_MIN_W = 56;
+const LABEL_MIN_H = 20;
+const TWO_LINE_MIN_H = 34;
+const TREE_PAGE = 300;
+const FONT = '11px system-ui, -apple-system, "Segoe UI", sans-serif';
+const FONT_BOLD = '600 11px system-ui, -apple-system, "Segoe UI", sans-serif';
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+const overlay = $('overlay');
+const ctx = canvas.getContext('2d');
+const octx = overlay.getContext('2d');
+const tooltip = $('tooltip');
+
+/* ---------- данные ---------- */
+
+const joinSource = (base, name) => (base.endsWith('/') ? base + name : `${base}/${name}`);
+
+function buildNode(raw, parent) {
+  const node = { name: raw.n, size: raw.s, kind: raw.k, note: raw.t || '', parent, children: [], rect: null, stamp: 0, el: null };
+  // Адрес на устройстве: задан у корня обхода, у вложенных объектов получается дописыванием имени.
+  node.source = raw.p || (parent && parent.source && !raw.x ? joinSource(parent.source, raw.n) : '');
+  node.children = (raw.c || []).map((child) => buildNode(child, node)).sort((a, b) => b.size - a.size);
+  node.fill = node.children.length ? dominantFill(node.children) : (KIND_LABEL[raw.k] ? raw.k : 'other');
+  return node;
+}
+
+function dominantFill(children) {
+  const totals = new Map();
+  for (const child of children) totals.set(child.fill, (totals.get(child.fill) || 0) + child.size);
+  let best = 'other';
+  let bestSize = -1;
+  for (const [fill, size] of totals) if (size > bestSize) { best = fill; bestSize = size; }
+  return best;
+}
+
+function sumLeavesByFill(node, totals) {
+  if (!node.children.length) { totals[node.fill] = (totals[node.fill] || 0) + node.size; return totals; }
+  for (const child of node.children) sumLeavesByFill(child, totals);
+  return totals;
+}
+
+const root = buildNode(REPORT.tree, null);
+const freeNode = root.children.find((c) => c.kind === 'free') || null;
+const state = { view: root, selected: null, hovered: null, showFree: false, stamp: 0, colors: {} };
+
+const kids = (node) => (state.showFree ? node.children : node.children.filter((c) => c.kind !== 'free'));
+const valueOf = (node) => (node === root && !state.showFree && freeNode ? node.size - freeNode.size : node.size);
+
+function formatSize(bytes) {
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1000 && unit < UNITS.length - 1) { value /= 1000; unit += 1; }
+  const digits = unit === 0 ? 0 : value < 10 ? 2 : value < 100 ? 1 : 0;
+  return `${value.toLocaleString('ru-RU', { maximumFractionDigits: digits })} ${UNITS[unit]}`;
+}
+
+function formatPercent(part, whole) {
+  if (!whole) return '';
+  const pct = (part / whole) * 100;
+  return `${pct.toLocaleString('ru-RU', { maximumFractionDigits: pct < 10 ? 1 : 0 })} %`;
+}
+
+function pathOf(node) {
+  const path = [];
+  for (let n = node; n; n = n.parent) path.unshift(n);
+  return path;
+}
+
+/* ---------- шапка ---------- */
+
+function renderHeader() {
+  $('device-name').textContent = REPORT.device.name;
+  $('device-meta').textContent = `${REPORT.device.model} · iOS ${REPORT.device.ios} · ${REPORT.scannedAt}`;
+  const summary = $('summary');
+  summary.textContent = '';
+  const parts = freeNode
+    ? [['Всего', root.size], ['Занято', root.size - freeNode.size], ['Свободно', freeNode.size]]
+    : [['Найдено', root.size]];
+  parts.forEach(([label, bytes], index) => {
+    if (index) summary.append(' · ');
+    summary.append(`${label} `);
+    const strong = document.createElement('strong');
+    strong.textContent = formatSize(bytes);
+    summary.append(strong);
+  });
+
+  const totals = sumLeavesByFill(root, {});
+  const legend = $('legend');
+  for (const kind of KINDS) {
+    if (!totals[kind.id]) continue;
+    const item = document.createElement('li');
+    item.append(makeSwatch(kind.id), `${kind.label} — ${formatSize(totals[kind.id])}`);
+    legend.append(item);
+  }
+}
+
+function makeSwatch(fill) {
+  const swatch = document.createElement('span');
+  swatch.className = 'swatch';
+  swatch.style.background = `var(--k-${fill})`;
+  return swatch;
+}
+
+/* ---------- карта (treemap) ---------- */
+
+function readColors() {
+  const style = getComputedStyle(document.documentElement);
+  const read = (name) => style.getPropertyValue(name).trim();
+  const colors = { surface: read('--surface'), groupBg: read('--surface-2'), text: read('--text'), text2: read('--text-2'), fill: {}, ink: {} };
+  for (const kind of KINDS) {
+    colors.fill[kind.id] = read(`--k-${kind.id}`);
+    colors.ink[kind.id] = read('--ink-on-fill');
+  }
+  colors.ink.video = read('--ink-on-video');
+  colors.ink.free = read('--ink-on-free');
+  state.colors = colors;
+}
+
+/* Squarified treemap (Bruls, Huizing, van Wijk): ряды подбираются так, чтобы клетки были ближе к квадрату. */
+function squarify(items, x, y, w, h, emit) {
+  let total = 0;
+  for (const item of items) total += item.value;
+  if (total <= 0) return;
+  const scale = (w * h) / total;
+  let start = 0;
+  while (start < items.length && w > 0 && h > 0) {
+    const side = Math.min(w, h);
+    let rowSum = 0;
+    let rowMin = Infinity;
+    let rowMax = 0;
+    let best = Infinity;
+    let end = start;
+    while (end < items.length) {
+      const area = items[end].value * scale;
+      const sum = rowSum + area;
+      const min = Math.min(rowMin, area);
+      const max = Math.max(rowMax, area);
+      const worst = Math.max((side * side * max) / (sum * sum), (sum * sum) / (side * side * min));
+      if (worst > best) break;
+      best = worst; rowSum = sum; rowMin = min; rowMax = max; end += 1;
+    }
+    const thickness = rowSum / side;
+    let offset = 0;
+    for (let i = start; i < end; i += 1) {
+      const length = (items[i].value * scale) / thickness;
+      if (w >= h) emit(items[i].node, x, y + offset, thickness, length);
+      else emit(items[i].node, x + offset, y, length, thickness);
+      offset += length;
+    }
+    if (w >= h) { x += thickness; w -= thickness; } else { y += thickness; h -= thickness; }
+    start = end;
+  }
+}
+
+function fitText(text, maxWidth) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = (low + high + 1) >> 1;
+    if (ctx.measureText(`${text.slice(0, mid)}…`).width <= maxWidth) low = mid; else high = mid - 1;
+  }
+  return low > 0 ? `${text.slice(0, low)}…` : '';
+}
+
+function drawCell(node, x, y, w, h) {
+  const gap = w > 3 && h > 3 ? 0.5 : 0;
+  ctx.fillStyle = state.colors.fill[node.fill];
+  ctx.fillRect(x + gap, y + gap, w - 2 * gap, h - 2 * gap);
+  if (w < LABEL_MIN_W || h < LABEL_MIN_H) return;
+  // Части приложения («Программа», «Документы и данные») подписываем названием самого приложения.
+  const bundle = node.parent && node.parent.kind === 'bundle' && node.parent !== state.view ? node.parent : null;
+  ctx.fillStyle = state.colors.ink[node.fill];
+  ctx.font = FONT_BOLD;
+  ctx.fillText(fitText(bundle ? bundle.name : node.name, w - 10), x + 5, y + 14);
+  if (h >= TWO_LINE_MIN_H) {
+    const detail = bundle ? `${node.name} · ${formatSize(node.size)}` : formatSize(node.size);
+    ctx.font = FONT;
+    ctx.fillText(fitText(detail, w - 10), x + 5, y + 28);
+  }
+}
+
+function drawGroupHeader(node, x, y, w) {
+  ctx.font = FONT_BOLD;
+  ctx.fillStyle = state.colors.text;
+  const name = fitText(node.name, w - 12);
+  ctx.fillText(name, x + 6, y + 14);
+  const used = ctx.measureText(name).width + 12;
+  ctx.font = FONT;
+  ctx.fillStyle = state.colors.text2;
+  const sizeText = formatSize(node.size);
+  if (ctx.measureText(sizeText).width + used + 6 <= w) ctx.fillText(sizeText, x + used, y + 14);
+}
+
+function place(node, x, y, w, h, depth) {
+  node.rect = [x, y, w, h];
+  node.stamp = state.stamp;
+  const children = kids(node);
+  if (!children.length || w < MIN_SPLIT_PX || h < MIN_SPLIT_PX) { drawCell(node, x, y, w, h); return; }
+
+  let ix = x; let iy = y; let iw = w; let ih = h;
+  if (depth === 1) {
+    ctx.fillStyle = state.colors.groupBg;
+    ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+    const hasHeader = w >= HEADER_MIN_W && h >= HEADER_MIN_H;
+    if (hasHeader) drawGroupHeader(node, x, y + 1, w);
+    const top = hasHeader ? HEADER_PX : 3;
+    ix += 3; iy += top; iw -= 6; ih -= top + 3;
+    if (iw < MIN_SPLIT_PX || ih < MIN_SPLIT_PX) { drawCell(node, x, y, w, h); return; }
+  } else if (node.kind === 'bundle' && w > BUNDLE_MIN_PX && h > BUNDLE_MIN_PX) {
+    // Чуть больший зазор вокруг приложения, чтобы его части читались как одно целое.
+    ix += 1; iy += 1; iw -= 2; ih -= 2;
+  }
+  const items = children.map((child) => ({ node: child, value: child.size }));
+  squarify(items, ix, iy, iw, ih, (child, cx, cy, cw, ch) => place(child, cx, cy, cw, ch, depth + 1));
+}
+
+function sizeCanvas(element, context, width, height) {
+  const ratio = window.devicePixelRatio || 1;
+  element.width = Math.max(1, Math.round(width * ratio));
+  element.height = Math.max(1, Math.round(height * ratio));
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+}
+
+function renderMap() {
+  const { width, height } = $('map').getBoundingClientRect();
+  sizeCanvas(canvas, ctx, width, height);
+  sizeCanvas(overlay, octx, width, height);
+  state.stamp += 1;
+  ctx.fillStyle = state.colors.surface;
+  ctx.fillRect(0, 0, width, height);
+  ctx.textBaseline = 'alphabetic';
+  place(state.view, 0, 0, width, height, 0);
+  state.hovered = null;
+  drawOverlay();
+}
+
+function nearestPlaced(node) {
+  for (let n = node; n; n = n.parent) {
+    if (n === state.view) return null;
+    if (n.stamp === state.stamp) return n;
+  }
+  return null;
+}
+
+function strokeRect(node, haloWidth, lineWidth) {
+  const [x, y, w, h] = node.rect;
+  octx.lineWidth = haloWidth;
+  octx.strokeStyle = state.colors.surface;
+  octx.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
+  octx.lineWidth = lineWidth;
+  octx.strokeStyle = state.colors.text;
+  octx.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
+}
+
+function drawOverlay() {
+  const { width, height } = $('map').getBoundingClientRect();
+  octx.clearRect(0, 0, width, height);
+  const selected = nearestPlaced(state.selected);
+  if (selected) strokeRect(selected, 5, 2.5);
+  if (state.hovered && state.hovered !== selected) strokeRect(state.hovered, 3, 1.5);
+}
+
+function hitTest(px, py) {
+  let node = state.view;
+  for (;;) {
+    let next = null;
+    for (const child of kids(node)) {
+      if (child.stamp !== state.stamp) continue;
+      const [x, y, w, h] = child.rect;
+      if (px >= x && px < x + w && py >= y && py < y + h) { next = child; break; }
+    }
+    if (!next) return node === state.view ? null : node;
+    node = next;
+  }
+}
+
+function nodeAtEvent(event) {
+  const bounds = canvas.getBoundingClientRect();
+  return hitTest(event.clientX - bounds.left, event.clientY - bounds.top);
+}
+
+/* ---------- подсказка ---------- */
+
+function showTooltip(node, event) {
+  tooltip.textContent = '';
+  const name = document.createElement('div');
+  name.className = 'tt-name';
+  name.textContent = node.name;
+  const size = document.createElement('div');
+  size.className = 'tt-size';
+  size.textContent = `${formatSize(node.size)} · ${formatPercent(node.size, root.size)} памяти устройства`;
+  const kind = document.createElement('div');
+  kind.className = 'tt-kind tt-dim';
+  kind.append(makeSwatch(node.fill), KIND_LABEL[node.fill]);
+  tooltip.append(name, size, kind);
+  const parents = pathOf(node).slice(1, -1).map((n) => n.name);
+  for (const text of [parents.join(' › '), node.note]) {
+    if (!text) continue;
+    const line = document.createElement('div');
+    line.className = 'tt-dim';
+    line.textContent = text;
+    tooltip.append(line);
+  }
+  tooltip.hidden = false;
+  const box = tooltip.getBoundingClientRect();
+  const left = Math.min(event.clientX + 14, window.innerWidth - box.width - 8);
+  const top = event.clientY + 16 + box.height > window.innerHeight ? event.clientY - box.height - 10 : event.clientY + 16;
+  tooltip.style.left = `${Math.max(8, left)}px`;
+  tooltip.style.top = `${Math.max(8, top)}px`;
+}
+
+function hideTooltip() {
+  tooltip.hidden = true;
+  if (state.hovered) { state.hovered = null; drawOverlay(); }
+}
+
+/* ---------- навигация ---------- */
+
+function renderCrumbs() {
+  const crumbs = $('crumbs');
+  crumbs.textContent = '';
+  const path = pathOf(state.view);
+  path.forEach((node, index) => {
+    if (index) {
+      const sep = document.createElement('span');
+      sep.className = 'sep';
+      sep.textContent = '›';
+      crumbs.append(sep);
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = `${node.name} (${formatSize(valueOf(node))})`;
+    if (index === path.length - 1) button.setAttribute('aria-current', 'location');
+    else button.addEventListener('click', () => setView(node));
+    crumbs.append(button);
+  });
+}
+
+function setView(node) {
+  state.view = node;
+  renderCrumbs();
+  renderMap();
+}
+
+function isInside(node, ancestor) {
+  for (let n = node; n; n = n.parent) if (n === ancestor) return true;
+  return false;
+}
+
+function zoomToward(node) {
+  const path = pathOf(node);
+  const next = path[path.indexOf(state.view) + 1];
+  if (next && kids(next).length) setView(next);
+}
+
+function zoomOut() {
+  if (state.view.parent) setView(state.view.parent);
+}
+
+function select(node, { scroll = true } = {}) {
+  if (state.selected && state.selected.el) state.selected.el.firstElementChild.classList.remove('selected');
+  state.selected = node;
+  updateExportButton();
+  if (!node) { drawOverlay(); return; }
+  if (!isInside(node, state.view)) setView(root);
+  revealInTree(node, scroll);
+  drawOverlay();
+}
+
+/* ---------- дерево (табличное представление) ---------- */
+
+function makeRow(node, depth) {
+  const item = document.createElement('div');
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.tabIndex = 0;
+  row.style.paddingLeft = `${6 + depth * 14}px`;
+  if (node.note) row.title = node.note;
+
+  const caret = document.createElement('button');
+  caret.type = 'button';
+  caret.className = 'caret';
+  caret.textContent = '▸';
+  caret.tabIndex = -1;
+  caret.setAttribute('aria-label', 'Развернуть');
+  caret.hidden = !kids(node).length;
+
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = node.name;
+
+  const parentValue = node.parent ? valueOf(node.parent) : valueOf(node);
+  const share = parentValue ? valueOf(node) / parentValue : 0;
+  const bar = document.createElement('span');
+  bar.className = 'bar';
+  const barFill = document.createElement('i');
+  barFill.style.width = `${Math.max(1, Math.round(share * 100))}%`;
+  bar.append(barFill);
+
+  const pct = document.createElement('span');
+  pct.className = 'pct';
+  pct.textContent = formatPercent(valueOf(node), parentValue);
+  const size = document.createElement('span');
+  size.className = 'size';
+  size.textContent = formatSize(valueOf(node));
+
+  row.append(caret, makeSwatch(node.fill), name, bar, pct, size);
+  const childBox = document.createElement('div');
+  childBox.hidden = true;
+  item.append(row, childBox);
+  node.el = item;
+  item.dataset.depth = String(depth);
+
+  caret.addEventListener('click', (event) => { event.stopPropagation(); toggle(node); });
+  row.addEventListener('click', () => select(node, { scroll: false }));
+  row.addEventListener('dblclick', () => setView(kids(node).length ? node : node.parent || root));
+  row.addEventListener('keydown', (event) => onRowKey(event, node));
+  return item;
+}
+
+function onRowKey(event, node) {
+  if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(node, { scroll: false }); }
+  else if (event.key === 'ArrowRight') { event.preventDefault(); setExpanded(node, true); }
+  else if (event.key === 'ArrowLeft') { event.preventDefault(); setExpanded(node, false); }
+}
+
+function appendChildRows(node, limit) {
+  const box = node.el.lastElementChild;
+  const depth = Number(node.el.dataset.depth) + 1;
+  const children = kids(node);
+  const moreButton = box.querySelector(':scope > .more');
+  if (moreButton) moreButton.remove();
+  const built = box.children.length;
+  const until = Math.min(children.length, Math.max(limit, built));
+  for (let i = built; i < until; i += 1) box.append(makeRow(children[i], depth));
+  if (until < children.length) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'more';
+    more.style.marginLeft = `${22 + depth * 14}px`;
+    more.textContent = `Показать ещё ${children.length - until}…`;
+    more.addEventListener('click', () => appendChildRows(node, until + TREE_PAGE));
+    box.append(more);
+  }
+}
+
+function setExpanded(node, expanded) {
+  if (!kids(node).length) return;
+  const box = node.el.lastElementChild;
+  if (expanded && !box.children.length) appendChildRows(node, TREE_PAGE);
+  box.hidden = !expanded;
+  const caret = node.el.firstElementChild.firstElementChild;
+  caret.textContent = expanded ? '▾' : '▸';
+  caret.setAttribute('aria-label', expanded ? 'Свернуть' : 'Развернуть');
+}
+
+function toggle(node) {
+  setExpanded(node, node.el.lastElementChild.hidden);
+}
+
+function revealInTree(node, scroll) {
+  const path = pathOf(node);
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const parent = path[i];
+    setExpanded(parent, true);
+    const index = kids(parent).indexOf(path[i + 1]);
+    if (index < 0) return; // узел скрыт (например, «Свободно» при выключенном флажке)
+    appendChildRows(parent, index + 1);
+  }
+  if (!node.el) return;
+  node.el.firstElementChild.classList.add('selected');
+  if (scroll) node.el.firstElementChild.scrollIntoView({ block: 'nearest' });
+}
+
+function renderTree() {
+  const pane = $('tree');
+  pane.textContent = '';
+  pane.append(makeRow(root, 0));
+  setExpanded(root, true);
+  if (state.selected) revealInTree(state.selected, false);
+}
+
+/* ---------- события ---------- */
+
+let resizeFrame = 0;
+function scheduleRender() {
+  cancelAnimationFrame(resizeFrame);
+  resizeFrame = requestAnimationFrame(renderMap);
+}
+
+canvas.addEventListener('mousemove', (event) => {
+  const node = nodeAtEvent(event);
+  if (!node) { hideTooltip(); return; }
+  if (node !== state.hovered) { state.hovered = node; drawOverlay(); }
+  showTooltip(node, event);
+});
+canvas.addEventListener('mouseleave', hideTooltip);
+canvas.addEventListener('click', (event) => {
+  const node = nodeAtEvent(event);
+  if (node) select(node);
+});
+canvas.addEventListener('dblclick', (event) => {
+  const node = nodeAtEvent(event);
+  if (node) zoomToward(node);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') zoomOut();
+});
+$('show-free').addEventListener('change', (event) => {
+  state.showFree = event.target.checked;
+  if (!state.showFree && state.selected === freeNode) select(null);
+  renderTree();
+  renderCrumbs();
+  renderMap();
+});
+new ResizeObserver(scheduleRender).observe($('map'));
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { readColors(); renderMap(); });
+
+/* ---------- копирование на ПК и резервная копия (только когда страницу отдаёт приложение) ---------- */
+
+const LIVE = REPORT.live || null;
+const POLL_MS = 700;
+const JOB_ICONS = { running: '', done: '✓ ', failed: '⚠ ', cancelled: '✕ ' };
+const JOB_ENDINGS = { done: 'готово', failed: 'ошибка', cancelled: 'отменено' };
+const FOLDER_DIALOG_HINT = 'Окно выбора папки открылось на компьютере — возможно, оно позади браузера.';
+const live = { job: null, busy: false, pollTimer: 0 };
+
+async function api(path, body) {
+  const response = await fetch(path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'X-IPhoneStat-Token': LIVE.token, 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const payload = await response.json();
+  if (!payload.ok) throw new Error(payload.error || 'Не удалось выполнить команду.');
+  return payload.data;
+}
+
+const isJobRunning = () => Boolean(live.job && live.job.state === 'running');
+
+function updateExportButton() {
+  if (!LIVE) return;
+  const button = $('export-btn');
+  const node = state.selected;
+  const exportable = Boolean(node && node.source);
+  button.disabled = !exportable || live.busy || isJobRunning();
+  button.textContent = exportable ? `Скопировать «${node.name}» на ПК (${formatSize(node.size)})` : 'Скопировать на ПК…';
+  button.title = exportable
+    ? 'Копия сохранится в выбранную папку на компьютере. На iPhone всё останется как есть.'
+    : 'Сначала выберите папку или файл в разделе «Медиа и файлы» — например DCIM с фотографиями.';
+  $('backup-btn').disabled = live.busy || isJobRunning();
+}
+
+function showNotice(title, detail) {
+  $('job').hidden = false;
+  $('job-title').textContent = title;
+  $('job-detail').textContent = detail;
+  $('job-detail').title = detail;
+  $('job-progress').hidden = true;
+  $('job-cancel').hidden = true;
+  $('job-reveal').hidden = true;
+  $('job-close').hidden = false;
+}
+
+function describeJob(job) {
+  if (job.state !== 'running') return [job.message, job.destination].filter(Boolean).join(' Папка: ');
+  const parts = [];
+  if (job.kind === 'export') {
+    parts.push(job.total_bytes ? `${formatSize(job.done_bytes)} из ${formatSize(job.total_bytes)}` : formatSize(job.done_bytes));
+  }
+  if (job.percent !== null) parts.push(`${Math.floor(job.percent)} %`);
+  if (job.current) parts.push(job.kind === 'export' ? job.current.split('/').pop() : job.current);
+  return parts.join(' · ');
+}
+
+function renderJob(job) {
+  live.job = job;
+  updateExportButton();
+  if (!job) return;
+  const running = job.state === 'running';
+  const ending = running ? '' : ` — ${JOB_ENDINGS[job.state] || job.state}`;
+  $('job').hidden = false;
+  $('job-title').textContent = `${JOB_ICONS[job.state] || ''}${job.title}${ending}`;
+  $('job-detail').textContent = describeJob(job);
+  $('job-detail').title = $('job-detail').textContent;
+  const progress = $('job-progress');
+  progress.hidden = !running;
+  if (job.percent === null) progress.removeAttribute('value'); else progress.value = job.percent;
+  $('job-cancel').hidden = !running;
+  $('job-reveal').hidden = !job.destination;
+  $('job-close').hidden = running;
+}
+
+async function pollJob() {
+  clearTimeout(live.pollTimer);
+  try {
+    const data = await api('/api/status');
+    renderJob(data.job);
+    if (isJobRunning()) live.pollTimer = setTimeout(pollJob, POLL_MS);
+  } catch (error) {
+    showNotice('⚠ Нет связи с приложением', 'Похоже, окно программы закрыто. Запустите iPhoneStat снова.');
+  }
+}
+
+async function runCommand(path, body) {
+  live.busy = true;
+  updateExportButton();
+  showNotice('Выберите папку', FOLDER_DIALOG_HINT);
+  try {
+    const data = await api(path, body);
+    if (data.started) await pollJob(); else $('job').hidden = true;
+  } catch (error) {
+    showNotice('⚠ Не получилось', error.message);
+  } finally {
+    live.busy = false;
+    updateExportButton();
+  }
+}
+
+function sendJobCommand(path) {
+  api(path, {}).catch((error) => showNotice('⚠ Не получилось', error.message));
+}
+
+function initLive() {
+  if (!LIVE) return;
+  $('header-actions').hidden = false;
+  $('export-btn').hidden = false;
+  $('export-btn').addEventListener('click', () => {
+    if (state.selected && state.selected.source) runCommand('/api/export', { source: state.selected.source });
+  });
+  $('backup-btn').addEventListener('click', () => {
+    const question = [
+      'Сделать полную резервную копию iPhone?',
+      '',
+      '• Это может занять от нескольких минут до часа и больше.',
+      '• iPhone должен быть разблокирован и может попросить код-пароль.',
+      '• Копия сохраняется в формате iTunes; данные на iPhone не меняются.',
+    ].join('\n');
+    if (window.confirm(question)) runCommand('/api/backup', {});
+  });
+  $('job-cancel').addEventListener('click', () => sendJobCommand('/api/cancel'));
+  $('job-reveal').addEventListener('click', () => sendJobCommand('/api/reveal'));
+  $('job-close').addEventListener('click', () => { $('job').hidden = true; });
+  updateExportButton();
+  pollJob();
+}
+
+$('show-free').hidden = !freeNode;
+$('show-free').parentElement.hidden = !freeNode;
+readColors();
+renderHeader();
+renderTree();
+renderCrumbs();
+renderMap();
+initLive();
+</script>
+</body>
+</html>

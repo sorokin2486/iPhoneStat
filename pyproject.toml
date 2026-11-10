@@ -1,0 +1,13 @@
+[project]
+name = "iphonestat"
+version = "0.1.0"
+description = "Карта занятого места на iPhone в духе WinDirStat: копирование папок на ПК и резервные копии"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["pymobiledevice3>=11.50,<12"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 130

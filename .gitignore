@@ -1,0 +1,18 @@
+# Окружение и кэши
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Сборка exe
+build/
+dist/
+*.spec
+
+# Отчёты содержат имена файлов и приложений с личного iPhone — в репозиторий не попадают
+reports/
+
+.claude/
