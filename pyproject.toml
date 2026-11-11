@@ -3,6 +3,7 @@ name = "iphonestat"
 version = "0.2.0"
 description = "Карта занятого места на iPhone в духе WinDirStat: копирование папок на ПК и резервные копии"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = ["pymobiledevice3>=11.50,<12", "pywebview>=6,<7"]
 
