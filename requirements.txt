@@ -1,1 +1,2 @@
 pymobiledevice3>=11.50,<12
+pywebview>=6,<7

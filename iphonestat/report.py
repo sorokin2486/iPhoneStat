@@ -41,3 +41,15 @@ def _to_script_safe_json(payload: object) -> str:
     """JSON, который безопасно вставлять внутрь <script>: имена файлов с устройства — недоверенные данные."""
     text = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
     return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
+WAITING_TEMPLATE_PATH = Path(__file__).with_name("waiting.html")
+TOKEN_PLACEHOLDER = '"__APP_TOKEN__"'
+
+
+def render_waiting(token: str) -> str:
+    """Экран ожидания: его приложение показывает, пока iPhone сканируется или если сканирование не удалось."""
+    template = WAITING_TEMPLATE_PATH.read_text(encoding="utf-8")
+    if TOKEN_PLACEHOLDER not in template:
+        raise ValueError(f"В шаблоне {WAITING_TEMPLATE_PATH.name} нет метки для токена")
+    return template.replace(TOKEN_PLACEHOLDER, _to_script_safe_json(token), 1)

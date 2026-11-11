@@ -20,6 +20,7 @@ from typing import Any
 from iphonestat import dialogs
 from iphonestat.dialogs import DialogBusyError
 from iphonestat.jobs import JobBusyError, JobRunner
+from iphonestat.session import ScanSession
 from iphonestat.transfer import backup_device, export_source, parse_source
 
 logger = logging.getLogger(__name__)
@@ -45,42 +46,49 @@ class DeviceActions:
 
     def __init__(
         self,
-        udid: str,
+        session: ScanSession,
         runner: JobRunner,
         pick_folder: Callable[[str], Path | None] = dialogs.pick_folder,
         reveal_folder: Callable[[Path], None] = dialogs.reveal_folder,
     ) -> None:
-        self._udid = udid
+        self._session = session
         self._runner = runner
         self._pick_folder = pick_folder
         self._reveal_folder = reveal_folder
 
     def status(self) -> dict[str, Any]:
         snapshot = self._runner.snapshot()
-        return {"job": snapshot.to_dict() if snapshot else None}
+        return {"job": snapshot.to_dict() if snapshot else None, "scan": self._session.snapshot().to_dict()}
+
+    def rescan(self) -> dict[str, Any]:
+        if self._runner.is_running():
+            raise ApiError(HTTPStatus.CONFLICT, "Дождитесь завершения текущей операции или отмените её.")
+        return {"started": self._session.start()}
 
     def start_export(self, source_text: Any) -> dict[str, Any]:
         try:
             source = parse_source(source_text)
         except ValueError as error:
             raise ApiError(HTTPStatus.BAD_REQUEST, f"Этот объект нельзя скопировать: {error}.") from error
+        udid = self._scanned_udid()
         folder = self._choose_folder(f"Куда скопировать «{source.folder_name}»?")
         if folder is None:
             return {"started": False}
         return self._start(
             JOB_EXPORT,
             f"Копирование «{source.folder_name}»",
-            lambda progress: export_source(self._udid, source, folder, progress),
+            lambda progress: export_source(udid, source, folder, progress),
         )
 
     def start_backup(self) -> dict[str, Any]:
+        udid = self._scanned_udid()
         folder = self._choose_folder("Где сохранить резервную копию iPhone?")
         if folder is None:
             return {"started": False}
         return self._start(
             JOB_BACKUP,
             "Резервная копия iPhone",
-            lambda progress: backup_device(self._udid, folder, progress, datetime.now()),
+            lambda progress: backup_device(udid, folder, progress, datetime.now()),
         )
 
     def cancel(self) -> dict[str, Any]:
@@ -95,6 +103,12 @@ class DeviceActions:
         except OSError as error:
             raise ApiError(HTTPStatus.CONFLICT, str(error)) from error
         return {"revealed": True}
+
+    def _scanned_udid(self) -> str:
+        scan = self._session.snapshot().scan
+        if scan is None:
+            raise ApiError(HTTPStatus.CONFLICT, "iPhone ещё не просканирован — обновите страницу.")
+        return scan.udid
 
     def _choose_folder(self, title: str) -> Path | None:
         if self._runner.is_running():
@@ -123,7 +137,7 @@ class AppServer(ThreadingHTTPServer):
         super().__init__((LOCAL_HOST, port), _Handler)
         self.token = secrets.token_urlsafe(32)
         self.actions = actions
-        self.page = render_page(self.token).encode("utf-8")
+        self.render_page = render_page
 
     @property
     def url(self) -> str:
@@ -141,7 +155,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._host_is_local():
             self._send_error(HTTPStatus.FORBIDDEN, "Доступ только с этого компьютера.")
         elif self.path == "/":
-            self._send(HTTPStatus.OK, self.server.page, "text/html; charset=utf-8")
+            self._send_page()
         elif self.path == "/api/status":
             self._handle_api(lambda _body: self.server.actions.status())
         else:
@@ -152,6 +166,7 @@ class _Handler(BaseHTTPRequestHandler):
         routes: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
             "/api/export": lambda body: actions.start_export(body.get("source")),
             "/api/backup": lambda _body: actions.start_backup(),
+            "/api/rescan": lambda _body: actions.rescan(),
             "/api/cancel": lambda _body: actions.cancel(),
             "/api/reveal": lambda _body: actions.reveal(),
         }
@@ -161,6 +176,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_api(routes[self.path])
         else:
             self._send_error(HTTPStatus.NOT_FOUND, "Команда не найдена.")
+
+    def _send_page(self) -> None:
+        try:
+            page = self.server.render_page(self.server.token).encode("utf-8")
+        except Exception:  # сервер не должен падать из-за одного запроса
+            logger.exception("Не удалось собрать страницу")
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Внутренняя ошибка приложения.")
+        else:
+            self._send(HTTPStatus.OK, page, "text/html; charset=utf-8")
 
     def _handle_api(self, action: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
         try:

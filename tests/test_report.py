@@ -1,10 +1,10 @@
 import json
 from datetime import datetime
 
-from iphonestat.__main__ import default_output_path, main
+from iphonestat.__main__ import main
 from iphonestat.demo import build_demo_scan
 from iphonestat.device import DeviceInfo, ScanResult
-from iphonestat.report import DATA_PLACEHOLDER, render_report
+from iphonestat.report import DATA_PLACEHOLDER, render_report, render_waiting
 from iphonestat.tree import KIND_DIR, KIND_FREE, KIND_HIDDEN, KIND_OTHER, Node, group, leaf
 
 SCANNED_AT = datetime(2026, 11, 10, 12, 30)
@@ -53,15 +53,17 @@ def test_demo_scan_accounts_for_every_byte_of_the_disk():
     assert kinds[KIND_HIDDEN] > 0
 
 
-def test_default_output_path_is_timestamped_and_marks_demo():
-    assert default_output_path(SCANNED_AT, demo=True).name == "demo-2026-11-10_12-30-00.html"
-    assert default_output_path(SCANNED_AT, demo=False).name == "iphone-2026-11-10_12-30-00.html"
+def test_waiting_page_carries_the_token_for_status_requests():
+    page = render_waiting("secret-token")
+
+    assert 'const TOKEN = "secret-token";' in page
+    assert "__APP_TOKEN__" not in page
 
 
 def test_main_in_demo_mode_writes_report_file(tmp_path):
     output = tmp_path / "out" / "report.html"
 
-    exit_code = main(["--demo", "--no-open", "--output", str(output)])
+    exit_code = main(["--demo", "--report-only", "--output", str(output)])
 
     assert exit_code == 0
     assert "iPhone (демо)" in _extract_payload(output.read_text(encoding="utf-8"))["device"]["name"]

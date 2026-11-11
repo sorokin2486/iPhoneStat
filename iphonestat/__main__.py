@@ -1,4 +1,4 @@
-"""Запуск: python -m iphonestat [--demo]"""
+"""Запуск: iPhoneStat.exe или python -m iphonestat"""
 
 from __future__ import annotations
 
@@ -9,35 +9,34 @@ import sys
 import webbrowser
 from collections.abc import Sequence
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from iphonestat import dialogs
+from iphonestat.app import MODE_BROWSER, MODE_SERVER_ONLY, MODE_WINDOW, run_app
 from iphonestat.demo import build_demo_scan
 from iphonestat.device import DeviceError, ScanResult, scan_device
 from iphonestat.dialogs import PICK_FOLDER_FLAG, show_folder_dialog
-from iphonestat.jobs import JobRunner
-from iphonestat.report import render_report, write_report
-from iphonestat.server import AppServer, DeviceActions
+from iphonestat.paths import APP_NAME, log_path, reports_dir
+from iphonestat.report import write_report
 
 logger = logging.getLogger("iphonestat")
 
-REPORTS_DIR = Path("reports")
 EXIT_OK = 0
-EXIT_SCAN_FAILED = 1
-JOB_SHUTDOWN_TIMEOUT_SECONDS = 10
+EXIT_FAILED = 1
+LOG_MAX_BYTES = 1_000_000
+LOG_BACKUPS = 2
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="iphonestat", description="Карта занятого места на iPhone (как WinDirStat).")
-    parser.add_argument("--demo", action="store_true", help="показать отчёт на вымышленных данных, без iPhone")
+    parser.add_argument("--demo", action="store_true", help="показать пример на вымышленных данных, без iPhone")
     parser.add_argument("--udid", help="серийный номер (UDID) устройства, если подключено несколько")
     parser.add_argument("--no-app-files", action="store_true", help="не обходить папки Documents приложений (быстрее)")
-    parser.add_argument("--output", type=Path, help="куда сохранить HTML-отчёт")
-    parser.add_argument("--no-open", action="store_true", help="не открывать отчёт в браузере")
-    parser.add_argument(
-        "--report-only",
-        action="store_true",
-        help="только сохранить отчёт в файл, без кнопок копирования и резервной копии",
-    )
+    parser.add_argument("--browser", action="store_true", help="открыть страницу в обычном браузере, а не в своём окне")
+    parser.add_argument("--server-only", action="store_true", help="не открывать окно: только адрес страницы в журнале")
+    parser.add_argument("--report-only", action="store_true", help="только сохранить HTML-отчёт в файл и выйти")
+    parser.add_argument("--output", type=Path, help="куда сохранить отчёт (вместе с --report-only)")
     parser.add_argument("--verbose", action="store_true", help="подробный журнал")
     # Служебный режим: приложение запускает само себя, чтобы показать окно выбора папки.
     parser.add_argument(PICK_FOLDER_FLAG, dest="pick_folder", metavar="TITLE", help=argparse.SUPPRESS)
@@ -51,70 +50,72 @@ def run_folder_picker(title: str) -> int:
     return EXIT_OK
 
 
-def wait_before_closing(exit_code: int) -> None:
-    """У exe, запущенного двойным щелчком, окно закрылось бы раньше, чем удастся прочитать ошибку."""
-    if exit_code != EXIT_OK and getattr(sys, "frozen", False) and sys.stdin is not None and sys.stdin.isatty():
-        input("Нажмите Enter, чтобы закрыть окно…")
+def configure_logging(verbose: bool) -> None:
+    """Журнал пишется в файл в профиле пользователя; в консоль — только если она есть (у exe её нет)."""
+    handlers: list[logging.Handler] = []
+    try:
+        log_path().parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(RotatingFileHandler(log_path(), maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUPS, encoding="utf-8"))
+    except OSError:
+        pass  # без файла журнала приложение всё равно работоспособно
+    if sys.stdout is not None:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(errors="replace")
+        handlers.append(logging.StreamHandler(sys.stdout))
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=handlers or [logging.NullHandler()],
+    )
+    if not verbose:
+        logging.getLogger("pymobiledevice3").setLevel(logging.WARNING)
 
 
-def default_output_path(now: datetime, demo: bool) -> Path:
-    prefix = "demo" if demo else "iphone"
-    return REPORTS_DIR / f"{prefix}-{now:%Y-%m-%d_%H-%M-%S}.html"
+async def scan_from_args(args: argparse.Namespace) -> ScanResult:
+    return await scan_device(udid=args.udid, include_app_files=not args.no_app_files)
 
 
-def run(args: argparse.Namespace) -> int:
+async def demo_scan() -> ScanResult:
+    return build_demo_scan()
+
+
+def save_report_only(args: argparse.Namespace) -> int:
     now = datetime.now()
     try:
-        scan: ScanResult = (
-            build_demo_scan()
-            if args.demo
-            else asyncio.run(scan_device(udid=args.udid, include_app_files=not args.no_app_files))
-        )
+        scan = asyncio.run(demo_scan() if args.demo else scan_from_args(args))
     except DeviceError as error:
         logger.error("%s", error)
-        return EXIT_SCAN_FAILED
-
-    output_path = write_report(scan, args.output or default_output_path(now, args.demo), now)
-    logger.info("Отчёт сохранён: %s", output_path.resolve())
-    if args.demo or args.report_only:
-        if not args.no_open:
-            webbrowser.open(output_path.resolve().as_uri())
-        return EXIT_OK
-    serve(scan, now, open_browser=not args.no_open)
+        return EXIT_FAILED
+    prefix = "demo" if args.demo else "iphone"
+    output = write_report(scan, args.output or reports_dir() / f"{prefix}-{now:%Y-%m-%d_%H-%M-%S}.html", now)
+    logger.info("Отчёт сохранён: %s", output.resolve())
+    if sys.stdout is None:  # exe без консоли: иначе пользователь не узнал бы, куда сохранился отчёт
+        webbrowser.open(output.resolve().as_uri())
     return EXIT_OK
 
 
-def serve(scan: ScanResult, scanned_at: datetime, open_browser: bool) -> None:
-    """Запускает приложение: страница с картой и рабочими кнопками копирования, пока окно не закроют."""
-    runner = JobRunner()
-    actions = DeviceActions(scan.udid, runner)
-    with AppServer(lambda token: render_report(scan, scanned_at, live_token=token), actions) as server:
-        logger.info("Приложение открыто: %s", server.url)
-        logger.info("Не закрывайте это окно, пока работаете с приложением. Выход — Ctrl+C.")
-        if open_browser:
-            webbrowser.open(server.url)
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            logger.info("Завершение…")
-        finally:
-            if runner.cancel():
-                runner.wait(JOB_SHUTDOWN_TIMEOUT_SECONDS)
+def run(args: argparse.Namespace) -> int:
+    if args.report_only:
+        return save_report_only(args)
+    mode = MODE_SERVER_ONLY if args.server_only else MODE_BROWSER if args.browser else MODE_WINDOW
+    if args.demo:
+        run_app(demo_scan, live=False, mode=mode)
+    else:
+        run_app(lambda: scan_from_args(args), live=True, mode=mode)
+    return EXIT_OK
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.pick_folder is not None:
         return run_folder_picker(args.pick_folder)
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(errors="replace")
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(message)s", stream=sys.stdout)
-    if not args.verbose:
-        logging.getLogger("pymobiledevice3").setLevel(logging.WARNING)
-    exit_code = run(args)
-    wait_before_closing(exit_code)
-    return exit_code
+    configure_logging(args.verbose)
+    try:
+        return run(args)
+    except Exception as error:
+        logger.exception("Приложение завершилось из-за ошибки")
+        dialogs.show_error(APP_NAME, f"iPhoneStat не смог запуститься.\n\n{type(error).__name__}: {error}\n\nЖурнал: {log_path()}")
+        return EXIT_FAILED
 
 
 if __name__ == "__main__":

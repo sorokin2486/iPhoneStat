@@ -8,8 +8,9 @@ import subprocess
 import sys
 import threading
 import tkinter
+from collections.abc import Callable
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 logger = logging.getLogger(__name__)
 
@@ -73,3 +74,27 @@ def reveal_folder(folder: Path) -> None:
     if not folder.is_dir():
         raise OSError("Папка не найдена.")
     os.startfile(folder)  # путь создан самим приложением, не получен извне
+
+
+def show_error(title: str, message: str) -> None:
+    """Сообщение об ошибке отдельным окном: у приложения без консоли иначе негде её показать."""
+    root = tkinter.Tk()
+    try:
+        root.withdraw()
+        root.attributes("-topmost", True)
+        messagebox.showerror(title, message, parent=root)
+    finally:
+        root.destroy()
+
+
+def run_companion_window(title: str, text: str, open_page: Callable[[], None]) -> None:
+    """Небольшое окно для режима «в браузере»: пока оно открыто, приложение работает."""
+    root = tkinter.Tk()
+    root.title(title)
+    root.resizable(False, False)
+    tkinter.Label(root, text=text, justify="left", padx=18, pady=14, wraplength=360).pack()
+    buttons = tkinter.Frame(root, padx=18, pady=12)
+    buttons.pack(fill="x")
+    tkinter.Button(buttons, text="Открыть страницу", command=open_page, padx=10).pack(side="left")
+    tkinter.Button(buttons, text="Выход", command=root.destroy, padx=10).pack(side="right")
+    root.mainloop()

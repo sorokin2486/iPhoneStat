@@ -1,4 +1,4 @@
-"""Точка входа для сборки iPhoneStat.exe (PyInstaller). Из исходников запускайте: python -m iphonestat"""
+"""Точка входа для сборки iPhoneStat.exe (PyInstaller, см. build.py). Из исходников запускайте: python -m iphonestat"""
 
 import sys
 

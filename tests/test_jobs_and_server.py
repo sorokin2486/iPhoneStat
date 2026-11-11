@@ -1,6 +1,7 @@
 """Фоновые задания и HTTP-интерфейс приложения (без настоящего iPhone и без системных окон)."""
 
 import asyncio
+import dataclasses
 import json
 import threading
 import urllib.error
@@ -9,9 +10,11 @@ import urllib.request
 import pytest
 
 from iphonestat import server as server_module
+from iphonestat.demo import build_demo_scan
 from iphonestat.device import DeviceError
 from iphonestat.jobs import STATE_CANCELLED, STATE_DONE, STATE_FAILED, JobBusyError, JobRunner
 from iphonestat.server import TOKEN_HEADER, AppServer, DeviceActions
+from iphonestat.session import PHASE_FAILED, PHASE_READY, ScanSession
 
 WAIT_SECONDS = 5
 
@@ -93,8 +96,19 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(server_module, "backup_device", fake_backup)
     runner = JobRunner()
     chosen = {"folder": tmp_path}
+    scans = {"count": 0, "error": None}
+
+    async def fake_scan():
+        scans["count"] += 1
+        if scans["error"]:
+            raise DeviceError(scans["error"])
+        return dataclasses.replace(build_demo_scan(), udid="FAKE-UDID")
+
+    session = ScanSession(fake_scan)
+    session.start()
+    session.wait(WAIT_SECONDS)
     actions = DeviceActions(
-        "FAKE-UDID",
+        session,
         runner,
         pick_folder=lambda title: chosen["folder"],
         reveal_folder=lambda folder: calls["revealed"].append(folder),
@@ -102,7 +116,7 @@ def app(tmp_path, monkeypatch):
     app_server = AppServer(lambda token: f"<html>{token}</html>", actions)
     thread = threading.Thread(target=app_server.serve_forever, daemon=True)
     thread.start()
-    yield type("App", (), {"server": app_server, "runner": runner, "calls": calls, "chosen": chosen})
+    yield type("App", (), {"server": app_server, "runner": runner, "calls": calls, "chosen": chosen, "session": session, "scans": scans})
     app_server.shutdown()
     app_server.server_close()
 
@@ -191,3 +205,52 @@ def test_unknown_paths_and_bad_bodies_get_clear_errors(app):
     assert _request(app, "/other", token=False)[0] == 404
     assert _request(app, "/api/export", ["not", "an", "object"])[0] == 400
     assert _request(app, "/api/cancel", {})[1].count('"cancelled": false') == 1
+
+
+def test_status_reports_scan_state_and_rescan_starts_a_new_scan(app):
+    scan = json.loads(_request(app, "/api/status")[1])["data"]["scan"]
+    assert (scan["phase"], scan["revision"]) == (PHASE_READY, 1)
+
+    app.scans["error"] = "iPhone не найден."
+    status, text = _request(app, "/api/rescan", {})
+    app.session.wait(WAIT_SECONDS)
+
+    assert (status, json.loads(text)["data"]) == (200, {"started": True})
+    scan = json.loads(_request(app, "/api/status")[1])["data"]["scan"]
+    assert (scan["phase"], scan["message"], scan["revision"]) == (PHASE_FAILED, "iPhone не найден.", 2)
+
+
+def test_copy_is_refused_until_the_phone_is_scanned(app):
+    app.scans["error"] = "iPhone не найден."
+    _request(app, "/api/rescan", {})
+    app.session.wait(WAIT_SECONDS)
+
+    assert _request(app, "/api/export", {"source": "afc:/DCIM"})[0] == 409
+    assert _request(app, "/api/backup", {})[0] == 409
+    assert app.calls["export"] == [] and app.calls["backup"] == []
+
+
+def test_rescan_is_refused_while_a_job_is_running(app, monkeypatch):
+    started = threading.Event()
+
+    async def endless(udid, folder, progress, now):
+        started.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(server_module, "backup_device", endless)
+    _request(app, "/api/backup", {})
+    assert started.wait(WAIT_SECONDS)
+
+    assert _request(app, "/api/rescan", {})[0] == 409
+    assert app.scans["count"] == 1
+    app.runner.cancel()
+    app.runner.wait(WAIT_SECONDS)
+
+
+def test_page_render_failure_is_reported_as_server_error(app):
+    def broken(token):
+        raise RuntimeError("boom")
+
+    app.server.render_page = broken
+
+    assert _request(app, "/", token=False)[0] == 500

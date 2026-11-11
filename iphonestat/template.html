@@ -119,6 +119,7 @@
     <span class="meta" id="device-meta"></span>
     <span class="summary" id="summary"></span>
     <span class="header-actions" id="header-actions" hidden>
+      <button type="button" class="btn" id="rescan-btn" title="Заново просканировать iPhone">Обновить</button>
       <button type="button" class="btn" id="backup-btn">Резервная копия iPhone…</button>
     </span>
   </div>
@@ -727,6 +728,7 @@ function updateExportButton() {
     ? 'Копия сохранится в выбранную папку на компьютере. На iPhone всё останется как есть.'
     : 'Сначала выберите папку или файл в разделе «Медиа и файлы» — например DCIM с фотографиями.';
   $('backup-btn').disabled = live.busy || isJobRunning();
+  $('rescan-btn').disabled = live.busy || isJobRunning();
 }
 
 function showNotice(title, detail) {
@@ -815,6 +817,9 @@ function initLive() {
       '• Копия сохраняется в формате iTunes; данные на iPhone не меняются.',
     ].join('\n');
     if (window.confirm(question)) runCommand('/api/backup', {});
+  });
+  $('rescan-btn').addEventListener('click', () => {
+    api('/api/rescan', {}).then(() => window.location.reload()).catch((error) => showNotice('⚠ Не получилось', error.message));
   });
   $('job-cancel').addEventListener('click', () => sendJobCommand('/api/cancel'));
   $('job-reveal').addEventListener('click', () => sendJobCommand('/api/reveal'));
