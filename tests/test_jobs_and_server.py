@@ -111,7 +111,7 @@ def app(tmp_path, monkeypatch):
         session,
         runner,
         pick_folder=lambda title: chosen["folder"],
-        reveal_folder=lambda folder: calls["revealed"].append(folder),
+        reveal=lambda folder: calls["revealed"].append(folder),
     )
     app_server = AppServer(lambda token: f"<html>{token}</html>", actions)
     thread = threading.Thread(target=app_server.serve_forever, daemon=True)

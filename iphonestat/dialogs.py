@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import sys
 import threading
@@ -69,11 +68,12 @@ def pick_folder(title: str) -> Path | None:
     return folder if folder.is_dir() else None
 
 
-def reveal_folder(folder: Path) -> None:
-    """Открывает папку в Проводнике."""
-    if not folder.is_dir():
-        raise OSError("Папка не найдена.")
-    os.startfile(folder)  # путь создан самим приложением, не получен извне
+def reveal_in_explorer(target: Path) -> None:
+    """Открывает Проводник в папке, где лежит файл или папка, и выделяет этот объект."""
+    if not target.exists():
+        raise OSError("Файл или папка не найдены — возможно, их переместили или удалили.")
+    # Путь создан самим приложением, не получен извне. Кавычки нужны для имён с пробелами и запятыми.
+    subprocess.Popen(f'explorer.exe /select,"{target.resolve()}"')
 
 
 def show_error(title: str, message: str) -> None:

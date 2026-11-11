@@ -49,12 +49,12 @@ class DeviceActions:
         session: ScanSession,
         runner: JobRunner,
         pick_folder: Callable[[str], Path | None] = dialogs.pick_folder,
-        reveal_folder: Callable[[Path], None] = dialogs.reveal_folder,
+        reveal: Callable[[Path], None] = dialogs.reveal_in_explorer,
     ) -> None:
         self._session = session
         self._runner = runner
         self._pick_folder = pick_folder
-        self._reveal_folder = reveal_folder
+        self._reveal = reveal
 
     def status(self) -> dict[str, Any]:
         snapshot = self._runner.snapshot()
@@ -99,7 +99,7 @@ class DeviceActions:
         if snapshot is None or not snapshot.destination:
             raise ApiError(HTTPStatus.CONFLICT, "Пока нечего открывать.")
         try:
-            self._reveal_folder(Path(snapshot.destination))
+            self._reveal(Path(snapshot.destination))
         except OSError as error:
             raise ApiError(HTTPStatus.CONFLICT, str(error)) from error
         return {"revealed": True}
